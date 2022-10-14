@@ -1,0 +1,159 @@
+#cats[j]=dict(enumerate(s.cat.categories))
+
+class parser_light_gbm_to_sql():
+    def __init__(self,tree,feats,cats={}):
+        self.tree = tree
+        self.d = {count:i for count,i in enumerate(feats)}
+        self.all_graph = []
+        self.all_colours = []
+        self.all_feats = []
+        self.indice_leafs = []
+        self.counts= []
+        self.cats = cats
+        self.inverse_cat = {i:{value:key for key,value in cats[i].items()} for i in cats.keys()}
+    
+    def pow(self,a,n=0,sigh=-1,first=True):
+        if first:
+            if a==0:
+                return
+            if abs(a)<1:
+                sigh=1
+            else:
+                sigh=-1
+        if a>=1 and a<10:
+            return -n
+        else:
+            a=a*(10**sigh)
+            n+=sigh
+            return self.pow(a,n,sigh,False)
+    def dfs(self,tree1,count=1,graph=[],colours=[],feats=[],indice=[], counts=[],sql1=[],max_depth=20):
+        #print(count)
+        if len(graph) == 0:
+            graph = [None for i in range(2**max_depth+2)]
+            colours = [None for i in range(2**max_depth+2)]
+            feats = [None for i in range(2**max_depth+2)]
+            indice = [None for i in range(2**max_depth+2)]
+            counts = [None for i in range(2**max_depth+2)]
+            sql1 = []
+            sql1.append(" case ")
+        #print(tree1.get('left_child') is not None,tree1.get('left_child') )
+        if tree1.get('left_child') is not None:
+            #print("dfdf")
+            if tree1.get('decision_type')=='==':
+                colours[count-1] = 2
+                graph[count-1] = list(map(lambda x: int(x),tree1.get('threshold').split("||")))
+            else:
+                graph[count-1] = tree1.get('threshold')
+                colours[count-1] = 1
+            feats[count-1] = tree1.get('split_feature')
+            self.dfs(tree1['left_child'] ,2*count,graph,colours,feats,indice,counts,sql1)
+            self.dfs(tree1['right_child'] ,2*count+1,graph,colours,feats,indice,counts,sql1)
+        else:
+            
+        
+            graph[count-1] = tree1.get('leaf_index')
+            #graph[count-1] = tree1.get('leaf_value')
+            indice[count-1] = tree1.get('leaf_index')
+            #print("fddfdferrrrrrrrr",count-1, graph[count-1], indice[count-1])
+            colours[count-1] = 0
+            counts[count-1] =tree1.get('leaf_count')
+            i = count
+            
+            #print("fddfdferrrrrrrrr",counts)
+            sql = " when 1=1 "
+            #print("sql",i)
+            while i != 1:
+                ost = i%2
+                i = i//2
+                #print("dfhdfhdf",i,colours[i-1])
+                if ost==1:
+                    
+                    if colours[i-1] == 2:
+                        
+                        #print(self.cats[feats[i-1]])
+                        t=" and %s not in ( "%self.d[feats[i-1]].upper() 
+                        for cat in graph[i-1]:
+                        
+                            t= t + "'%s'"%self.cats[feats[i-1]][cat] + ", "
+                        t=t[:len(t)-2]+") "
+                        sql +=t
+                    #sql+=" and %s > %s"%(self.d[feats[i-1]],graph[i-1])
+                    else:
+                        if abs(graph[i-1])<1:
+                            pow1=self.pow(graph[i-1])
+                            sql += " and %s > %s"%(self.d[feats[i-1]].upper(),graph[i-1]) 
+                        else:
+                            sql += " and %s > %s"%(self.d[feats[i-1]].upper(),round(graph[i-1],2)) 
+                        
+                else:
+                    if colours[i-1]==2:
+                        b=[]
+                        t=" and %s  in ( "%self.d[feats[i-1]].upper() 
+                        #print(self.cats[feats[i-1]])
+                        for cat in graph[i-1]:
+                            t= t + "'%s'"%self.cats[feats[i-1]][cat] + ", "
+                        t = t[:len(t)-2]+") "   
+                        sql += t
+                    #sql+=" and %s > %s"%(self.d[feats[i-1]],graph[i-1])
+                    else: 
+                        if abs(graph[i-1])<1:
+                            pow1=self.pow(graph[i-1])
+                            '{:.5f}'.format(graph[i-1])
+                            sql += " and %s <= %s"%(self.d[feats[i-1]].upper(),'{:.5f}'.format(graph[i-1]))
+                        else:
+                            
+                            sql += " and %s > %s"%(self.d[feats[i-1]].upper(),round(graph[i-1],2)) 
+            sql += " then %s "%round(graph[count-1],4)
+                
+            #print(sql)
+            sql1.append(sql)
+        #self.sql1.append(self.sql)
+        #print(indice)
+        return graph,colours,feats,indice,counts,sql1
+    def parse_all_tree(self,table):
+        final = "select  ("
+        
+        for i in range(len(self.tree)):
+            #print(i)
+            graph,colours,feats,indice,counts,sql1 = self.dfs(self.tree[i]['tree_structure'])
+            self.all_graph.append(graph)
+            self.all_colours.append(colours)
+            self.all_feats.append(feats)
+            self.indice_leafs.append(indice)
+            self.counts.append(counts)
+            for i in sql1:
+                final += i
+            #print("thus ss\ssss",sql1)
+            final+=" end + "
+        final = final[:len(final)-3]+" ) from %s"%table
+        return final
+    def predict_proba(self,x,num,warm_start=True):
+        begin=1
+        if warm_start:
+            graph,colours,feats,indice,counts=  self.all_graph[num],self.all_colours[num],self.all_feats[num],self.indice_leafs[num],self.counts[num]
+            
+        else:
+            
+            graph,colours,feats,indice,counts,sql1= self.dfs(self.tree[num]['tree_structure'])
+            #print(indice[82])
+        #print("huynu",begin)
+        while colours[begin-1]!=0:
+            #print("huynu",f"begin={begin},feats={x[feats[begin-1]]}, porog={graph[begin-1]},num_feat={feats[begin-1]},{indice[82]}")
+            if  (colours[begin-1] == 2  and self.inverse_cat[feats[begin-1]][x[feats[begin-1]]]  in graph[begin-1])  \
+            or (colours[begin-1] != 2 and x[feats[begin-1]] <= graph[begin-1])  :
+                 begin *= 2
+            else:
+                begin = begin*2+1
+        #print()
+        print(graph[begin-1],indice[begin-1],begin-1)
+        return round(graph[begin-1],4),indice[begin-1]
+    def predict_proba_for_all_trees(self,feats_f,warm_start=True):
+        proba = 0
+        
+        for num in range(0,len(self.tree)):
+            
+           
+            proba += self.predict_proba(feats_f,num,warm_start)[0]
+            #print(self.predict_proba(feats_f,num,warm_start)[0])
+        return proba,1/(1+np.exp(-proba))
+    
